@@ -486,7 +486,7 @@
 
   <!-- Look hint -->
   <div id="look-hint" style="position:absolute;bottom:140px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(0,255,100,0.45);letter-spacing:3px;text-align:center;pointer-events:none;">
-    ARROW KEYS / Q E = DRAAIEN &nbsp;|&nbsp; SPACE = SCHIETEN
+    MOVE MOUSE LEFT/RIGHT TO LOOK &nbsp;·&nbsp; CLICK TO SHOOT
   </div>
 
   <!-- Reload bar -->
@@ -550,8 +550,8 @@ let ammo = 30, reserve = 120;
 let reloading = false;
 let aiming = false;
 
-const MOVE_SPEED = 0.08;
-const SPRINT_SPEED = 0.14;
+const MOVE_SPEED = 0.03;
+const SPRINT_SPEED = 0.055;
 const ROT_SPEED = 0.0022;
 const MAP_SIZE = 24;
 const CELL = 64;
@@ -1150,6 +1150,7 @@ function gameLoop(ts) {
   const dt = ts - lastTime; lastTime = ts;
 
   if (shootCooldown > 0) shootCooldown--;
+  applyMouseLook();
   movePlayer(dt);
   updateEnemies();
   drawFrame();
@@ -1181,72 +1182,66 @@ function gameOver() {
   if (document.pointerLockElement) document.exitPointerLock();
 }
 
-// ---- POINTER LOCK + DRAG FALLBACK ----
-let dragging = false;
-let lastDragX = 0;
-let lastDragY = 0;
-let dragStartX = 0;
-let dragStartY = 0;
-let dragMoved = false;
-let rightDragging = false;
+// ---- FREE MOUSE LOOK — no click needed ----
+// Works by tracking where the mouse is relative to screen center.
+// Moving right of center turns right, left of center turns left.
+// The further from center, the faster the turn.
+// Left-click = shoot, Right-click = ADS toggle.
 
-// Try pointer lock on canvas click (works when opened as file in browser)
+let mouseScreenX = W / 2;
+let mouseScreenY = H / 2;
+let mouseLookActive = false; // becomes true once mouse enters the game area
+
+const DEADZONE = 60;       // px from center where no rotation happens
+const LOOK_SENS = 0.0018;  // rotation speed per pixel outside deadzone
+
+document.addEventListener('pointerlockchange', () => {
+  locked = !!document.pointerLockElement;
+});
+
+// Try pointer lock when possible (downloaded file in real browser)
 canvas.addEventListener('click', () => {
   if (gameRunning && !locked) canvas.requestPointerLock();
 });
 
-document.addEventListener('pointerlockchange', () => {
-  locked = !!document.pointerLockElement;
-  const hint = document.getElementById('look-hint');
-  if (hint) hint.style.display = locked ? 'none' : 'block';
-});
-
-// Pointer-lock mouse look
+// Pointer-lock path (real browser, downloaded file)
 document.addEventListener('mousemove', e => {
-  if (!locked || !gameRunning) return;
-  player.angle += e.movementX * ROT_SPEED * (aiming ? 0.4 : 1);
+  if (!gameRunning) return;
+  if (locked) {
+    player.angle += e.movementX * ROT_SPEED * (aiming ? 0.4 : 1);
+    return;
+  }
+  // Free-mouse path: track absolute position
+  mouseScreenX = e.clientX;
+  mouseScreenY = e.clientY;
+  mouseLookActive = true;
 });
 
-// ---- DRAG TO LOOK (works in iframes / without pointer lock) ----
+canvas.addEventListener('mouseleave', () => { mouseLookActive = false; });
+canvas.addEventListener('mouseenter', () => { mouseLookActive = true; });
+
+// Apply free-mouse rotation every frame (called from game loop)
+function applyMouseLook() {
+  if (locked || !mouseLookActive || !gameRunning) return;
+  const cx = W / 2;
+  const dx = mouseScreenX - cx;
+  const absDx = Math.abs(dx);
+  if (absDx > DEADZONE) {
+    const sign = dx > 0 ? 1 : -1;
+    const strength = (absDx - DEADZONE) * LOOK_SENS * (aiming ? 0.35 : 1);
+    player.angle += sign * strength;
+  }
+}
+
+// Mouse buttons
 canvas.addEventListener('mousedown', e => {
   if (!gameRunning) return;
+  if (e.button === 0) { shoot(); }
   if (e.button === 2) {
-    // right mouse: toggle ADS
-    rightDragging = true;
     aiming = !aiming;
     document.getElementById('scope-overlay').classList.toggle('active', aiming);
     document.getElementById('crosshair').style.opacity = aiming ? '0' : '1';
     e.preventDefault();
-    return;
-  }
-  if (e.button === 0) {
-    dragging = true;
-    dragMoved = false;
-    dragStartX = e.clientX;
-    dragStartY = e.clientY;
-    lastDragX = e.clientX;
-    lastDragY = e.clientY;
-  }
-});
-
-document.addEventListener('mousemove', e => {
-  if (!gameRunning || locked) return;
-  if (dragging) {
-    const dx = e.clientX - lastDragX;
-    if (Math.abs(dx) > 1) dragMoved = true;
-    player.angle += dx * ROT_SPEED * 2.2 * (aiming ? 0.4 : 1);
-    lastDragX = e.clientX;
-    lastDragY = e.clientY;
-  }
-});
-
-document.addEventListener('mouseup', e => {
-  if (!gameRunning) return;
-  if (e.button === 0) {
-    // Only shoot if the mouse barely moved (was a click, not a drag)
-    if (!dragMoved) shoot();
-    dragging = false;
-    dragMoved = false;
   }
   if (e.button === 2) rightDragging = false;
 });
